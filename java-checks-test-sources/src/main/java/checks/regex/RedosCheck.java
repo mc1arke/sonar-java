@@ -9,10 +9,14 @@ public class RedosCheck {
   String email;
 
   void realWorldExamples(String str) {
+    str.matches("x*x*x*"); // Noncompliant {{Make sure the regex used here, which is vulnerable to cubic runtime due to backtracking, cannot lead to denial of service.}}
     String cloudflareAttack = "(?:(?:\"|'|\\]|\\}|\\\\|\\d|(?:nan|infinity|true|false|null|undefined|symbol|math)|\\`|\\-|\\+)+[)]*;?((?:\\s|-|~|!|\\{\\}|\\|\\||\\+)*.*(?:.*=.*)))";
+    String cloudflareAttackWithoutLookahead = "(?:(?:\"|'|\\]|\\}|\\\\|\\d|(?:nan|infinity|true|false|null|undefined|symbol|math)|\\`|\\-|\\+)+[)]*;?((?:\\s|-|~|!|\\{\\}|\\|\\||\\+)*.*))";
     String stackOverflowAttack = "^[\\s\\u200c]+|[\\s\\u200c]+$";
-    str.replaceAll(cloudflareAttack, ""); // Noncompliant {{Make sure the regex used here, which is vulnerable to quadratic runtime due to backtracking, cannot lead to denial of service.}}
+    str.matches(cloudflareAttack); // Noncompliant {{Make sure the regex used here, which is vulnerable to O(n^5) runtime due to backtracking, cannot lead to denial of service.}}
+    str.matches(cloudflareAttackWithoutLookahead); // Noncompliant {{Make sure the regex used here, which is vulnerable to cubic runtime due to backtracking, cannot lead to denial of service.}}
     str.replaceAll(stackOverflowAttack, ""); // Noncompliant {{Make sure the regex used here, which is vulnerable to quadratic runtime due to backtracking, cannot lead to denial of service.}}
+
   }
 
   void fullAndPartialMatches(String str) {
@@ -78,6 +82,13 @@ public class RedosCheck {
     str.split(",\\s*+"); // Compliant
     str.split(",\\s*+,"); // Compliant
     str.split("\\s*+"); // Compliant
+  }
+
+  void differentPolynomials(String str) {
+    str.matches("x*x*"); // Noncompliant {{Make sure the regex used here, which is vulnerable to quadratic runtime due to backtracking, cannot lead to denial of service.}}
+    str.matches("x*x*x*"); // Noncompliant {{Make sure the regex used here, which is vulnerable to cubic runtime due to backtracking, cannot lead to denial of service.}}
+    str.matches("x*x*x*x*"); // Noncompliant {{Make sure the regex used here, which is vulnerable to O(n^4) runtime due to backtracking, cannot lead to denial of service.}}
+    str.matches("x*x*x*x*x*"); // Noncompliant {{Make sure the regex used here, which is vulnerable to O(n^5) runtime due to backtracking, cannot lead to denial of service.}}
   }
 
   void fixedInJava9(String str) {

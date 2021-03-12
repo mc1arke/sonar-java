@@ -59,6 +59,7 @@ public class RedosCheck extends AbstractRegexCheckTrackingMatchType {
   private static final String JAVA8_MESSAGE = " or make sure the code is only run using Java 9 or later";
   private static final String EXP = "exponential";
   private static final String QUAD = "quadratic";
+  private static final String CUBIC = "cubic";
 
   /**
    * The maximum number of repetitions we keep track of in order to find overlapping consecutive repetitions.
@@ -75,6 +76,7 @@ public class RedosCheck extends AbstractRegexCheckTrackingMatchType {
 
   private boolean regexContainsBackReference;
   private BacktrackingType foundBacktrackingType;
+  private int foundPolynomialDegree;
 
   private final RegexReachabilityChecker reachabilityChecker = new RegexReachabilityChecker(false);
   private final IntersectAutomataChecker intersectionChecker = new IntersectAutomataChecker(false);
@@ -88,13 +90,24 @@ public class RedosCheck extends AbstractRegexCheckTrackingMatchType {
   enum BacktrackingType {
     ALWAYS_EXPONENTIAL,
     QUADRATIC_WHEN_OPTIMIZED,
-    ALWAYS_QUADRATIC,
+    ALWAYS_POLYNOMIAL,
     LINEAR_WHEN_OPTIMIZED,
     NO_ISSUE
   }
 
   private boolean isJava9OrHigher() {
     return context.getJavaVersion().isNotSet() || context.getJavaVersion().asInt() >= 9;
+  }
+
+  private static String polynomialDegreeToString(int degree) {
+    switch (degree) {
+      case 2:
+        return QUAD;
+      case 3:
+        return CUBIC;
+      default:
+        return String.format("O(n^%d)", degree);
+    }
   }
   
   private Optional<String> message() {
@@ -113,12 +126,20 @@ public class RedosCheck extends AbstractRegexCheckTrackingMatchType {
         } else {
           return Optional.of(String.format(MESSAGE, EXP, canBeOptimized ? JAVA8_MESSAGE : ""));
         }
-      case ALWAYS_QUADRATIC:
-        return Optional.of(String.format(MESSAGE, QUAD, ""));
+      case ALWAYS_POLYNOMIAL:
+        return Optional.of(String.format(MESSAGE, polynomialDegreeToString(foundPolynomialDegree), ""));
       case NO_ISSUE:
         return Optional.empty();
     }
     throw new IllegalStateException("This line is not actually reachable");
+  }
+
+  private void resetState() {
+    regexContainsBackReference = false;
+    foundBacktrackingType = BacktrackingType.NO_ISSUE;
+    foundPolynomialDegree = 0;
+    reachabilityChecker.clearCache();
+    intersectionChecker.clearCache();
   }
 
   @Override
@@ -126,10 +147,7 @@ public class RedosCheck extends AbstractRegexCheckTrackingMatchType {
     if (regexForLiterals.getResult().getText().length() > MAX_REGEX_LENGTH) {
       return;
     }
-    regexContainsBackReference = false;
-    foundBacktrackingType = BacktrackingType.NO_ISSUE;
-    reachabilityChecker.clearCache();
-    intersectionChecker.clearCache();
+    resetState();
     boolean isUsedForFullMatch = matchType == MatchType.FULL || matchType == MatchType.BOTH;
     boolean isUsedForPartialMatch = matchType == MatchType.PARTIAL || matchType == MatchType.BOTH;
     RedosFinder visitor = new RedosFinder(regexForLiterals.getStartState(), regexForLiterals.getFinalState(), isUsedForFullMatch, isUsedForPartialMatch);
@@ -140,16 +158,28 @@ public class RedosCheck extends AbstractRegexCheckTrackingMatchType {
   }
 
   private void addBacktracking(BacktrackingType newBacktrackingType) {
+    if (newBacktrackingType == BacktrackingType.ALWAYS_POLYNOMIAL) {
+      throw new IllegalArgumentException("addPolynomialBacktracking should be used for ALWAYS_POLYNOMIAL");
+    }
     if (newBacktrackingType.ordinal() < foundBacktrackingType.ordinal()) {
       foundBacktrackingType = newBacktrackingType;
     }
   }
 
-  private class RedosFinder extends RegexBaseVisitor {
+  private void addPolynomialBacktracking(int degree) {
+    if (BacktrackingType.ALWAYS_POLYNOMIAL.ordinal() < foundBacktrackingType.ordinal()) {
+      foundBacktrackingType = BacktrackingType.ALWAYS_POLYNOMIAL;
+    }
+    if (degree > foundPolynomialDegree) {
+      foundPolynomialDegree = degree;
+    }
+  }
 
+  private class RedosFinder extends RegexBaseVisitor {
 
     private final Deque<RepetitionTree> nonPossessiveRepetitions = new ArrayDeque<>();
     private final Map<AutomatonState, Boolean> canFailCache = new HashMap<>();
+    private final Map<RepetitionTree, Integer> overlapDegree = new HashMap<>();
 
     private final AutomatonState startOfRegex;
     private final AutomatonState endOfRegex;
@@ -181,13 +211,16 @@ public class RedosCheck extends AbstractRegexCheckTrackingMatchType {
           if (reachabilityChecker.canReach(repetition, tree)) {
             SubAutomaton auto1 = new SubAutomaton(repetition.getElement(), tree.continuation(), false);
             SubAutomaton auto2 = new SubAutomaton(repetition.continuation(), tree.continuation(), false);
+            intersectionChecker.clearCache();
             if (intersectionChecker.check(auto1, auto2)) {
-              addBacktracking(BacktrackingType.ALWAYS_QUADRATIC);
+              int degree = overlapDegree.getOrDefault(repetition, 1) + 1;
+              overlapDegree.put(tree, degree);
+              addPolynomialBacktracking(degree);
             }
           }
         }
         if (overlapsWithImplicitMatchAlls(tree)) {
-          addBacktracking(BacktrackingType.ALWAYS_QUADRATIC);
+          addPolynomialBacktracking(overlapDegree.getOrDefault(tree, 1) + 1);
         }
         addIfNonPossessive(tree);
       }
